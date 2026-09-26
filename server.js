@@ -8,6 +8,7 @@ const {
   generateImposition,
   validateImposition,
   buildCsv,
+  buildProofHtml,
 } = require('./src/imposition');
 
 const app = express();
@@ -65,6 +66,27 @@ app.post('/api/export', (req, res) => {
     : `imposition-${req.body.totalPages}p.csv`;
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.send(csv);
+});
+
+/** 校验通过后导出双面打样独立 HTML（A4 横向，每张纸正反各一页，短边翻转镜像）；存在错误时拒绝导出 */
+app.post('/api/export/proof', (req, res) => {
+  const result = validateImposition(req.body);
+  if (!result) {
+    return res.status(400).json({ error: '拼版数据格式不正确' });
+  }
+  if (!result.valid) {
+    return res.status(400).json({ error: '存在拼版错误，已禁止导出', errors: result.errors });
+  }
+  const html = buildProofHtml(req.body);
+  if (!html) {
+    return res.status(400).json({ error: '拼版数据格式不正确' });
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  const filename = req.body.signatures
+    ? `imposition-proof-${req.body.totalPages}p-${req.body.signatureCount}sig.html`
+    : `imposition-proof-${req.body.totalPages}p.html`;
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(html);
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));

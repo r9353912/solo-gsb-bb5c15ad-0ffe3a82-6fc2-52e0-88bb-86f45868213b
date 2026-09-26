@@ -550,6 +550,161 @@ function validateImposition(raw) {
   return { valid, errors, slotErrors };
 }
 
+/* ---------- 双面打样 HTML ---------- */
+
+/** 四角对位标（十字套圆）：正背面画在同一物理位置，双面打印透光应重合，用于套准检查 */
+function registrationMark(posStyle) {
+  return (
+    `<svg class="reg" style="${posStyle}" viewBox="0 0 10 10" aria-hidden="true">` +
+    '<circle cx="5" cy="5" r="2.4" fill="none" stroke="#000" stroke-width="0.3"/>' +
+    '<path d="M5 0.5V9.5M0.5 5H9.5" fill="none" stroke="#000" stroke-width="0.3"/>' +
+    '</svg>'
+  );
+}
+
+/**
+ * 打样半版：pos 左/右；page 页码或 null（空白版位）。
+ * creepMm 为 null 表示未启用爬移补偿；否则仅页码内容朝中央折线平移
+ * （左半 +c 向右、右半 −c 向左），空白版位与版位标签不动。
+ */
+function proofHalf(pos, page, creepMm) {
+  const posTag = `<span class="pos-tag">${POS_LABEL[pos]}</span>`;
+  if (page === null) {
+    return `<div class="half ${pos}">${posTag}<span class="blank-label">空白</span></div>`;
+  }
+  let style = '';
+  if (creepMm !== null) {
+    const shift = pos === 'left' ? creepMm : -creepMm;
+    style = ` style="transform:translateX(${shift.toFixed(2)}mm)"`;
+  }
+  return `<div class="half ${pos}">${posTag}<span class="page-num"${style}>${page}</span></div>`;
+}
+
+/** 打样单页（一张纸的一面）：A4 横向，左右两半版 + 中央折线 + 四角对位标 */
+function proofPage(headLeft, headMid, leftPage, rightPage, creepMm) {
+  return (
+    '<section class="sheet-page">' +
+    '<header class="page-head">' +
+    `<span>${headLeft}</span>` +
+    `<span>${headMid}</span>` +
+    '<span>A4 横向 · 请按 100% 比例打印 · 双面请选择「短边翻转」</span>' +
+    '</header>' +
+    proofHalf('left', leftPage, creepMm) +
+    proofHalf('right', rightPage, creepMm) +
+    '<div class="fold"></div>' +
+    '<span class="fold-label">折线</span>' +
+    registrationMark('top:3mm;left:3mm') +
+    registrationMark('top:3mm;right:3mm') +
+    registrationMark('bottom:3mm;left:3mm') +
+    registrationMark('bottom:3mm;right:3mm') +
+    '</section>'
+  );
+}
+
+const PROOF_CSS = `
+@page { size: A4 landscape; margin: 0; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  background: #e5e7eb;
+  color: #111;
+}
+.sheet-page {
+  position: relative;
+  width: 297mm;
+  height: 210mm;
+  overflow: hidden;
+  background: #fff;
+  page-break-after: always;
+  break-after: page;
+}
+.sheet-page:last-child { page-break-after: auto; break-after: auto; }
+@media screen {
+  body { padding: 16px 0; }
+  .sheet-page { margin: 0 auto 16px; box-shadow: 0 2px 14px rgba(15, 23, 42, .25); }
+}
+@media print {
+  body { background: none; }
+}
+.page-head {
+  position: absolute; top: 3.5mm; left: 13mm; right: 13mm;
+  display: flex; justify-content: space-between; gap: 8mm;
+  font-size: 8.5pt; color: #555; white-space: nowrap;
+}
+.half {
+  position: absolute; top: 0; bottom: 0; width: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.half.left { left: 0; }
+.half.right { right: 0; }
+.pos-tag {
+  position: absolute; top: 11mm; left: 0; right: 0;
+  text-align: center; font-size: 9pt; color: #9ca3af; letter-spacing: .2em;
+}
+.page-num { font-size: 64pt; font-weight: 700; line-height: 1; }
+.blank-label {
+  font-size: 20pt; color: #b6bcc7; letter-spacing: .3em;
+  border: 0.4mm dashed #c9cfda; border-radius: 2mm; padding: 3mm 9mm;
+}
+.fold { position: absolute; left: 50%; top: 0; bottom: 0; border-left: 0.35mm dashed #dc2626; }
+.fold-label { position: absolute; left: calc(50% + 1.5mm); bottom: 3mm; font-size: 8pt; color: #dc2626; }
+.reg { position: absolute; width: 7mm; height: 7mm; }
+`;
+
+/**
+ * 生成双面打样独立 HTML；结构非法返回 null。
+ * 固定 A4 横向，每张纸正反各一页，按帖号与帖内纸张顺序排列（正面页后紧跟背面页）。
+ * 正面页：左半 = 正面左版、右半 = 正面右版；
+ * 背面页按短边翻转镜像排布：左半 = 反面右版、右半 = 反面左版，文字均保持正向
+ * （正背面同一物理半区的页码画在打样页同一侧，透光对照即为同一张书叶的正反）。
+ * 每面标出左右页码 / 空白版位、中央折线与四角对位标。
+ * 启用爬移补偿时，仅页码内容按该纸张补偿量朝折线平移，折线与对位标保持原位。
+ */
+function buildProofHtml(raw) {
+  const state = normalizeState(raw);
+  if (!state) return null;
+
+  const groups = state.mode === 'multi'
+    ? state.signatures
+    : [{ sig: null, sheets: state.sheets }];
+
+  const pagesHtml = [];
+  for (const g of groups) {
+    for (const s of g.sheets) {
+      const where = g.sig == null
+        ? `第 ${s.index} 张纸（共 ${g.sheets.length} 张）`
+        : `第 ${g.sig} 帖 · 第 ${s.index} 张纸（帖内共 ${g.sheets.length} 张）`;
+      const creepMm = state.creep ? s.creep : null;
+      const creepNote = state.creep
+        ? `爬移补偿 ${s.creep.toFixed(2)} mm：仅页码内容朝折线平移，折线与对位标不动`
+        : '';
+      // 正面：左半左版、右半右版
+      pagesHtml.push(proofPage(`${where} · 正面`, creepNote, s.front.left, s.front.right, creepMm));
+      // 背面：短边翻转，左右版位相对正面镜像（左半 = 反面右版、右半 = 反面左版），文字正向
+      pagesHtml.push(proofPage(`${where} · 反面（左右镜像）`, creepNote, s.back.right, s.back.left, creepMm));
+    }
+  }
+
+  const title = state.mode === 'multi'
+    ? `双面打样 · 成品 ${state.pages} 页 · ${state.signatureCount} 帖 ${state.sheetCount} 张纸`
+    : `双面打样 · 成品 ${state.pages} 页 · ${state.sheetCount} 张纸`;
+
+  return [
+    '<!DOCTYPE html>',
+    '<html lang="zh-CN">',
+    '<head>',
+    '<meta charset="UTF-8">',
+    `<title>${title}</title>`,
+    `<style>${PROOF_CSS}</style>`,
+    '</head>',
+    '<body>',
+    ...pagesHtml,
+    '</body>',
+    '</html>',
+    '',
+  ].join('\n');
+}
+
 /** 生成 CSV（带 BOM，Excel 友好）；结构非法返回 null */
 function buildCsv(raw) {
   const state = normalizeState(raw);
@@ -619,4 +774,5 @@ module.exports = {
   normalizeState,
   validateImposition,
   buildCsv,
+  buildProofHtml,
 };

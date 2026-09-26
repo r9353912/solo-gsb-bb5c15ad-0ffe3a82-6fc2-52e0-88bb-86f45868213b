@@ -5,6 +5,7 @@ const els = {
   generateBtn: document.getElementById('generateBtn'),
   resetBtn: document.getElementById('resetBtn'),
   exportBtn: document.getElementById('exportBtn'),
+  proofBtn: document.getElementById('proofBtn'),
   singleModeBtn: document.getElementById('singleModeBtn'),
   multiModeBtn: document.getElementById('multiModeBtn'),
   sigCapLabel: document.getElementById('sigCapLabel'),
@@ -94,6 +95,7 @@ function setLayout(next) {
     els.summary.textContent = '';
     els.resetBtn.disabled = true;
     els.exportBtn.disabled = true;
+    els.proofBtn.disabled = true;
     els.errors.innerHTML = '<p class="muted">已切换拼版模式，请重新点击「生成拼版」。</p>';
   }
 }
@@ -390,6 +392,7 @@ async function validateNow() {
     renderErrors(result);
     markSlotErrors(result.slotErrors || []);
     els.exportBtn.disabled = !result.valid;
+    els.proofBtn.disabled = !result.valid;
   } catch (e) {
     els.errors.innerHTML = '';
     const p = document.createElement('p');
@@ -397,6 +400,7 @@ async function validateNow() {
     p.textContent = `校验请求失败：${e.message}`;
     els.errors.appendChild(p);
     els.exportBtn.disabled = true;
+    els.proofBtn.disabled = true;
   }
 }
 
@@ -406,8 +410,8 @@ function renderErrors(result) {
     const p = document.createElement('p');
     p.className = 'ok';
     p.textContent = layout === 'multi'
-      ? '✓ 校验通过：各帖页码连续、无重复、无缺失，帖内正反配对正确，可以导出 CSV。'
-      : '✓ 校验通过：页码无重复、无缺失，各纸张正反配对正确，可以导出 CSV。';
+      ? '✓ 校验通过：各帖页码连续、无重复、无缺失，帖内正反配对正确，可以导出 CSV 或下载双面打样。'
+      : '✓ 校验通过：页码无重复、无缺失，各纸张正反配对正确，可以导出 CSV 或下载双面打样。';
     els.errors.appendChild(p);
     return;
   }
@@ -485,29 +489,42 @@ function markSlotErrors(slotErrors) {
 
 /* ---------- 导出 ---------- */
 
-async function exportCsv() {
+/** 下载结果文件（CSV / 打样 HTML）的通用逻辑 */
+async function downloadResult(path, filename, errorLabel) {
   if (!state) return;
-  const res = await fetch('/api/export', {
+  const res = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(state),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    alert(data.error || '导出失败');
+    alert(data.error || errorLabel);
     return;
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = layout === 'multi'
-    ? `imposition-${state.totalPages}p-${state.signatureCount}sig.csv`
-    : `imposition-${state.totalPages}p.csv`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function exportCsv() {
+  const filename = layout === 'multi'
+    ? `imposition-${state.totalPages}p-${state.signatureCount}sig.csv`
+    : `imposition-${state.totalPages}p.csv`;
+  return downloadResult('/api/export', filename, '导出失败');
+}
+
+function downloadProof() {
+  const filename = layout === 'multi'
+    ? `imposition-proof-${state.totalPages}p-${state.signatureCount}sig.html`
+    : `imposition-proof-${state.totalPages}p.html`;
+  return downloadResult('/api/export/proof', filename, '打样下载失败');
 }
 
 /* ---------- 事件绑定 ---------- */
@@ -515,6 +532,7 @@ async function exportCsv() {
 els.generateBtn.addEventListener('click', generate);
 els.resetBtn.addEventListener('click', reset);
 els.exportBtn.addEventListener('click', exportCsv);
+els.proofBtn.addEventListener('click', downloadProof);
 els.pagesInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') generate();
 });
