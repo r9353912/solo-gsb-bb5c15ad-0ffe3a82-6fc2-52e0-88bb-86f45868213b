@@ -5,6 +5,7 @@ const els = {
   generateBtn: document.getElementById('generateBtn'),
   resetBtn: document.getElementById('resetBtn'),
   exportBtn: document.getElementById('exportBtn'),
+  proofBtn: document.getElementById('proofBtn'),
   singleModeBtn: document.getElementById('singleModeBtn'),
   multiModeBtn: document.getElementById('multiModeBtn'),
   sigCapLabel: document.getElementById('sigCapLabel'),
@@ -94,6 +95,7 @@ function setLayout(next) {
     els.summary.textContent = '';
     els.resetBtn.disabled = true;
     els.exportBtn.disabled = true;
+    els.proofBtn.disabled = true;
     els.errors.innerHTML = '<p class="muted">已切换拼版模式，请重新点击「生成拼版」。</p>';
   }
 }
@@ -390,6 +392,7 @@ async function validateNow() {
     renderErrors(result);
     markSlotErrors(result.slotErrors || []);
     els.exportBtn.disabled = !result.valid;
+    els.proofBtn.disabled = !result.valid;
   } catch (e) {
     els.errors.innerHTML = '';
     const p = document.createElement('p');
@@ -397,6 +400,7 @@ async function validateNow() {
     p.textContent = `校验请求失败：${e.message}`;
     els.errors.appendChild(p);
     els.exportBtn.disabled = true;
+    els.proofBtn.disabled = true;
   }
 }
 
@@ -406,8 +410,8 @@ function renderErrors(result) {
     const p = document.createElement('p');
     p.className = 'ok';
     p.textContent = layout === 'multi'
-      ? '✓ 校验通过：各帖页码连续、无重复、无缺失，帖内正反配对正确，可以导出 CSV。'
-      : '✓ 校验通过：页码无重复、无缺失，各纸张正反配对正确，可以导出 CSV。';
+      ? '✓ 校验通过：各帖页码连续、无重复、无缺失，帖内正反配对正确，可以导出 CSV / 下载打样。'
+      : '✓ 校验通过：页码无重复、无缺失，各纸张正反配对正确，可以导出 CSV / 下载打样。';
     els.errors.appendChild(p);
     return;
   }
@@ -510,11 +514,37 @@ async function exportCsv() {
   URL.revokeObjectURL(url);
 }
 
+async function downloadProof() {
+  if (!state) return;
+  const res = await fetch('/api/proof', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || '打样下载失败');
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = layout === 'multi'
+    ? `proof-${state.totalPages}p-${state.signatureCount}sig.html`
+    : `proof-${state.totalPages}p.html`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /* ---------- 事件绑定 ---------- */
 
 els.generateBtn.addEventListener('click', generate);
 els.resetBtn.addEventListener('click', reset);
 els.exportBtn.addEventListener('click', exportCsv);
+els.proofBtn.addEventListener('click', downloadProof);
 els.pagesInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') generate();
 });
